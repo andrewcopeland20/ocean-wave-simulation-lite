@@ -1,22 +1,3 @@
-Last login: Mon Nov 17 13:28:51 on ttys000
-andrewcopeland@Andrews-MacBook-Air-2 ~ % cd Documents/Projects 
-andrewcopeland@Andrews-MacBook-Air-2 Projects % python3 -m http.server 8000
-Serving HTTP on :: port 8000 (http://[::]:8000/) ...
-::1 - - [15/Dec/2025 12:27:34] "GET / HTTP/1.1" 200 -
-::1 - - [15/Dec/2025 12:27:34] code 404, message File not found
-::1 - - [15/Dec/2025 12:27:34] "GET /favicon.ico HTTP/1.1" 404 -
-::1 - - [15/Dec/2025 12:27:37] "GET /ocean-wave-simulation-reflections.html HTTP/1.1" 200 -
-::1 - - [15/Dec/2025 12:27:57] code 404, message File not found
-::1 - - [15/Dec/2025 12:27:57] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
-::1 - - [15/Dec/2025 12:30:36] "GET /ocean-wave-simulation-reflections.html HTTP/1.1" 200 -
-::1 - - [15/Dec/2025 12:30:36] code 404, message File not found
-::1 - - [15/Dec/2025 12:30:36] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
-::1 - - [15/Dec/2025 12:34:56] "GET /ocean-wave-simulation-reflections.html HTTP/1.1" 200 -
-::1 - - [15/Dec/2025 12:40:52] "GET /ocean-wave-simulation-reflections.html HTTP/1.1" 200 -
-^C 
-Keyboard interrupt received, exiting.
-andrewcopeland@Andrews-MacBook-Air-2 Projects % vim ocean-wave-simulation-reflections.html
-
 <!doctype html>
 <html lang="en">
 <head>
@@ -37,5 +18,429 @@ andrewcopeland@Andrews-MacBook-Air-2 Projects % vim ocean-wave-simulation-reflec
     html, body { margin:0; height:100%; overflow:hidden; background:#050b12; font-family: var(--sans); }
     canvas{ display:block; width:100%; height:100%; }
     #ui{
-@                                                                               
-                                                                        
+      position: fixed; top: 16px; left: 16px; width: 360px; max-width: calc(100% - 32px);
+      background: var(--panel);
+      border: 1px solid var(--stroke);
+      border-radius: var(--radius);
+      padding: 14px 14px 12px;
+      color: var(--text);
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 18px 40px var(--shadow);
+      user-select: none;
+    }
+    .title{ font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.92; margin: 0 0 10px; }
+    .row{ display:flex; justify-content:space-between; align-items:baseline; gap: 10px; margin: 10px 0 6px; }
+    label{ font-size: 12px; opacity: 0.85; }
+    .val{ font-size: 12px; font-family: var(--mono); opacity: 0.92; color: rgba(200,240,255,0.95); }
+    input[type=range]{ width: 100%; accent-color: rgba(120,210,255,0.9); }
+    .hint{ margin-top: 10px; font-size: 12px; color: var(--muted); line-height: 1.35; }
+    .badge{ margin-top: 8px; font-size: 11px; opacity: 0.7; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.159.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.159.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+
+<body>
+  <div id="ui" role="application" aria-label="Ocean Wave Simulation">
+    <div class="title">Ocean Wave Simulation</div>
+
+    <div class="row"><label for="wind">Wind speed</label><div class="val" id="windV">12</div></div>
+    <input id="wind" type="range" min="0" max="30" step="1" value="12">
+
+    <div class="row"><label for="height">Wave height</label><div class="val" id="heightV">0.75</div></div>
+    <input id="height" type="range" min="0" max="2" step="0.01" value="0.75">
+
+    <div class="row"><label for="light">Lighting</label><div class="val" id="lightV">0.70</div></div>
+    <input id="light" type="range" min="0" max="1" step="0.01" value="0.70">
+
+    <div class="hint">More natural ocean = broad spectrum + evolving swell + micro ripples + Fresnel reflections.</div>
+    <div class="badge" id="badge">Running…</div>
+  </div>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { Sky } from "three/addons/objects/Sky.js";
+
+    // ---- UI ----
+    const windEl = document.getElementById("wind");
+    const heightEl = document.getElementById("height");
+    const lightEl = document.getElementById("light");
+    const windV = document.getElementById("windV");
+    const heightV = document.getElementById("heightV");
+    const lightV = document.getElementById("lightV");
+    const badge = document.getElementById("badge");
+
+    function syncUI(){
+      windV.textContent = `${(+windEl.value).toFixed(0)}`;
+      heightV.textContent = `${(+heightEl.value).toFixed(2)}`;
+      lightV.textContent = `${(+lightEl.value).toFixed(2)}`;
+    }
+    ["input","change"].forEach(evt => {
+      windEl.addEventListener(evt, syncUI, { passive: true });
+      heightEl.addEventListener(evt, syncUI, { passive: true });
+      lightEl.addEventListener(evt, syncUI, { passive: true });
+    });
+    syncUI();
+
+    // ---- Renderer / Scene / Camera ----
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x050b12, 90, 420);
+
+    const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 3500);
+    camera.position.set(0, 18, 56);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.055;
+    controls.minDistance = 22;
+    controls.maxDistance = 190;
+    controls.maxPolarAngle = Math.PI * 0.48;
+    controls.target.set(0, 2, 0);
+
+    // ---- Sky + environment reflections ----
+    const sky = new Sky();
+    sky.scale.setScalar(10000);
+    scene.add(sky);
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+
+    function updateSkyAndEnv(lighting01){
+      const phi   = THREE.MathUtils.degToRad(98 - lighting01 * 32);
+      const theta = THREE.MathUtils.degToRad(215 - lighting01 * 25);
+      const sunDir = new THREE.Vector3().setFromSphericalCoords(1, phi, theta).normalize();
+
+      const u = sky.material.uniforms;
+      u.turbidity.value = 7.0 + 4.5 * (1.0 - lighting01);
+      u.rayleigh.value = 1.6 + 1.8 * lighting01;
+      u.mieCoefficient.value = 0.006;
+      u.mieDirectionalG.value = 0.84;
+      u.sunPosition.value.copy(sunDir).multiplyScalar(10000);
+
+      const envRT = pmrem.fromScene(sky);
+      scene.environment = envRT.texture;
+
+      return sunDir;
+    }
+
+    // ---- Lights ----
+    const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+    scene.add(sun);
+    const hemi = new THREE.HemisphereLight(0xaad9ff, 0x06121a, 0.55);
+    scene.add(hemi);
+
+    // ---- Ocean mesh ----
+    const SIZE = 420;
+    const SEG = 256; // if needed: 192 for performance
+
+    const geometry = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+    geometry.rotateX(-Math.PI / 2);
+
+    const posAttr = geometry.attributes.position;
+    const base = new Float32Array(posAttr.count * 3);
+    for (let i=0;i<posAttr.count;i++){
+      base[i*3+0] = posAttr.getX(i);
+      base[i*3+1] = posAttr.getY(i);
+      base[i*3+2] = posAttr.getZ(i);
+    }
+
+    // Less "metal", more water: higher roughness, zero metalness, Fresnel-ish reflectivity.
+    const waterMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0x0b3a52,
+      metalness: 0.0,
+      roughness: 0.22,
+      clearcoat: 0.65,
+      clearcoatRoughness: 0.16,
+      reflectivity: 0.65,
+      ior: 1.33,
+      transmission: 0.0
+    });
+
+    // Micro ripples + Fresnel boost via shader hook (still uses PBR lighting)
+    waterMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = { value: 0 };
+      shader.uniforms.uWind = { value: 0.4 };
+      shader.uniforms.uMicro = { value: 1.0 };
+
+      // Simple hash/noise helpers + micro normal perturbation
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          "#include <common>",
+          `#include <common>
+           uniform float uTime;
+           uniform float uWind;
+           uniform float uMicro;
+
+           float hash21(vec2 p){
+             p = fract(p*vec2(123.34, 345.45));
+             p += dot(p, p+34.345);
+             return fract(p.x*p.y);
+           }
+
+           float noise2(vec2 p){
+             vec2 i = floor(p);
+             vec2 f = fract(p);
+             float a = hash21(i);
+             float b = hash21(i + vec2(1.0,0.0));
+             float c = hash21(i + vec2(0.0,1.0));
+             float d = hash21(i + vec2(1.0,1.0));
+             vec2 u = f*f*(3.0-2.0*f);
+             return mix(a,b,u.x) + (c-a)*u.y*(1.0-u.x) + (d-b)*u.x*u.y;
+           }
+
+           vec3 microNormal(vec3 n, vec3 pos){
+             // Two bands of small ripples, animated; stronger with wind.
+             float w = clamp(uWind, 0.0, 1.0);
+             float t = uTime * (0.25 + 1.25*w);
+             float s1 = 0.18 + 0.35*w;
+             float s2 = 0.35 + 0.65*w;
+
+             float n1 = noise2(pos.xz*0.35 + vec2(t*0.35, -t*0.25));
+             float n2 = noise2(pos.xz*0.85 + vec2(-t*0.65, t*0.55));
+
+             float h = (n1*2.0-1.0)*s1 + (n2*2.0-1.0)*s2;
+
+             // approximate gradient via small offset
+             float e = 0.15;
+             float hx = noise2((pos.xz+vec2(e,0))*0.35 + vec2(t*0.35, -t*0.25))*2.0-1.0;
+             float hz = noise2((pos.xz+vec2(0,e))*0.35 + vec2(t*0.35, -t*0.25))*2.0-1.0;
+
+             vec3 g = vec3((hx - (n1*2.0-1.0))/e, 0.0, (hz - (n1*2.0-1.0))/e);
+             vec3 nn = normalize(n + uMicro * w * 0.35 * vec3(-g.x, 0.0, -g.z));
+             return nn;
+           }`
+        )
+        .replace(
+          "#include <normal_fragment_maps>",
+          `#include <normal_fragment_maps>
+           // Add subtle micro ripples to the final normal.
+           normal = microNormal(normal, vViewPosition);`
+        );
+
+      waterMaterial.userData.shader = shader;
+    };
+
+    const ocean = new THREE.Mesh(geometry, waterMaterial);
+    ocean.position.y = 0.0;
+    scene.add(ocean);
+
+    // ---- Random, evolving wave spectrum (less rhythmic) ----
+    function mulberry32(seed){
+      return function(){
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    const rand = mulberry32(1337);
+
+    // Smooth-ish noise in JS for domain warping (cheap)
+    function hash2(x, y){
+      const s = Math.sin(x*127.1 + y*311.7) * 43758.5453;
+      return s - Math.floor(s);
+    }
+    function smoothNoise(x, y){
+      const xi = Math.floor(x), yi = Math.floor(y);
+      const xf = x - xi, yf = y - yi;
+      const a = hash2(xi, yi);
+      const b = hash2(xi+1, yi);
+      const c = hash2(xi, yi+1);
+      const d = hash2(xi+1, yi+1);
+      const u = xf*xf*(3-2*xf);
+      const v = yf*yf*(3-2*yf);
+      return (a*(1-u) + b*u)*(1-v) + (c*(1-u) + d*u)*v;
+    }
+
+    function buildSpectrum(){
+      // log-ish distribution of wavelengths for realism
+      const waves = [];
+      const N = 28; // base components; we’ll pair them => ~56 components
+      for (let i=0;i<N;i++){
+        // wavelengths: more small than large, but keep some swell
+        const r = rand();
+        let wl;
+        if (r < 0.25) wl = 170 + rand()*180;     // swell
+        else if (r < 0.70) wl = 70 + rand()*120; // mid
+        else wl = 22 + rand()*60;                // short
+
+        const a = rand()*Math.PI*2;
+        const dir = new THREE.Vector2(Math.cos(a), Math.sin(a)).normalize();
+
+        const ampWeight = wl > 160 ? 1.00 : wl > 90 ? 0.55 : 0.26;
+        const steep = wl > 160 ? 0.08 : wl > 90 ? 0.14 : 0.22;
+        const sp = wl > 160 ? 0.45 : wl > 90 ? 0.75 : 1.15;
+
+        const phase = rand()*Math.PI*2;
+
+        waves.push({ dir, wl, ampWeight, steep, sp, phase, drift: rand()*3.0 });
+
+        // opposite-direction pair (cancels “marching”)
+        waves.push({ dir: dir.clone().multiplyScalar(-1), wl, ampWeight, steep, sp, phase: phase + Math.PI*0.31, drift: rand()*3.0 });
+      }
+      return waves;
+    }
+
+    const waves = buildSpectrum();
+
+    function applyControls(){
+      const wind = +windEl.value;     // 0..30
+      const height = +heightEl.value; // 0..2
+      const lighting = +lightEl.value;
+
+      const sunDir = updateSkyAndEnv(lighting);
+      sun.position.copy(sunDir.clone().multiplyScalar(75));
+      sun.intensity = 0.8 + 2.1 * lighting;
+      hemi.intensity = 0.35 + 0.55 * lighting;
+
+      renderer.toneMappingExposure = 0.75 + 0.62 * lighting;
+
+      // Water tint shifts gently with lighting
+      const deep = new THREE.Color(0x071b24);
+      const bright = new THREE.Color(0x0f3f57);
+      waterMaterial.color.copy(deep.clone().lerp(bright, lighting * 0.9));
+
+      // Avoid “metal sheet”: keep roughness up, let clearcoat handle glancing sparkle
+      waterMaterial.roughness = 0.18 + 0.14 * (1.0 - lighting);
+      waterMaterial.clearcoat = 0.55 + 0.25 * lighting;
+      waterMaterial.clearcoatRoughness = 0.14 + 0.10 * (1.0 - lighting);
+
+      ocean.userData.windN = wind / 30;
+      ocean.userData.height = height;
+
+      // also update shader micro-ripples
+      if (waterMaterial.userData.shader){
+        waterMaterial.userData.shader.uniforms.uWind.value = ocean.userData.windN;
+      }
+    }
+
+    windEl.addEventListener("input", applyControls, { passive: true });
+    heightEl.addEventListener("input", applyControls, { passive: true });
+    lightEl.addEventListener("input", applyControls, { passive: true });
+    applyControls();
+
+    const clock = new THREE.Clock();
+    let fpsSmooth = 60;
+
+    function animate(){
+      requestAnimationFrame(animate);
+      const dt = clock.getDelta();
+      const t = clock.elapsedTime;
+
+      controls.update();
+
+      const windN = ocean.userData.windN ?? 0.4;
+      const H = ocean.userData.height ?? 0.75;
+
+      // Overall amplitude
+      const ampScale = 0.35 + 2.2 * (H / 2);
+
+      // Wind drives activity (speed + chop), but not a single direction
+      const speedBase = 0.20 + 1.95 * windN;
+      const chop = 0.12 + 0.60 * windN;
+
+      // Slow “sea state” modulation so it never locks into a loop
+      const seaMod = 0.85 + 0.25 * Math.sin(t*0.13) + 0.15 * Math.sin(t*0.07 + 1.7);
+
+      // Slowly evolving “swell rotation” (small amount, just to break regularity)
+      const swellTurn = 0.18 * Math.sin(t*0.05); // radians
+      const cs = Math.cos(swellTurn), sn = Math.sin(swellTurn);
+
+      // Domain warp scale (adds natural irregularity)
+      const warpScale = 0.012;
+      const warpAmt = (0.8 + 1.2*windN);
+
+      for (let i=0;i<posAttr.count;i++){
+        const x0 = base[i*3+0];
+        const y0 = base[i*3+1];
+        const z0 = base[i*3+2];
+
+        // Domain warp: perturb sample location with low-frequency noise
+        const nx = smoothNoise(x0*warpScale + t*0.03, z0*warpScale);
+        const nz = smoothNoise(x0*warpScale, z0*warpScale + t*0.03);
+        const wx = x0 + (nx*2-1) * 10.0 * warpAmt;
+        const wz = z0 + (nz*2-1) * 10.0 * warpAmt;
+
+        let x = x0;
+        let z = z0;
+        let y = y0;
+
+        for (let w=0; w<waves.length; w++){
+          const ww = waves[w];
+
+          // Apply tiny swell rotation only to the longer waves
+          let dx = ww.dir.x, dz = ww.dir.y;
+          if (ww.wl > 130){
+            const rx = dx*cs - dz*sn;
+            const rz = dx*sn + dz*cs;
+            dx = rx; dz = rz;
+          }
+
+          const k = (Math.PI * 2) / ww.wl;
+          const a = ampScale * ww.ampWeight * 0.20 * seaMod;
+
+          // keep stable
+          const Q = ww.steep * (0.35 + 0.65 * chop) / (k * a * 7 + 1e-6);
+
+          // slight per-wave time drift avoids phase locking
+          const localT = t * (speedBase * ww.sp) + ww.phase + Math.sin(t*0.11 + ww.drift) * 0.65;
+
+          const phase = k * (dx * wx + dz * wz) + localT;
+
+          const c = Math.cos(phase);
+          const s = Math.sin(phase);
+
+          x += Q * a * dx * c;
+          z += Q * a * dz * c;
+          y += a * s;
+        }
+
+        posAttr.setXYZ(i, x, y, z);
+      }
+
+      posAttr.needsUpdate = true;
+      geometry.computeVertexNormals();
+
+      // update micro-ripples time uniform
+      if (waterMaterial.userData.shader){
+        waterMaterial.userData.shader.uniforms.uTime.value = t;
+        waterMaterial.userData.shader.uniforms.uMicro.value = 1.0;
+      }
+
+      renderer.render(scene, camera);
+
+      const instFps = 1 / Math.max(dt, 1e-6);
+      fpsSmooth = fpsSmooth * 0.92 + instFps * 0.08;
+      if ((t % 0.25) < dt) badge.textContent = `Running • ${Math.round(fpsSmooth)} FPS`;
+    }
+
+    animate();
+
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    window.addEventListener("error", (e) => {
+      badge.textContent = "Error — open DevTools Console";
+      console.error(e.error || e.message || e);
+    });
+  </script>
+</body>
+</html>                                                           
